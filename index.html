@@ -10,10 +10,11 @@
     <link rel="stylesheet" href="./lib/tailwind.css">
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .qr-matrix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; background: white; padding: 12px; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+        .qr-matrix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; width: min(900px, calc(100vw - 32px)); margin-left: 50%; transform: translateX(-50%); background: white; padding: 12px; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
         .qr-matrix canvas { width: 100% !important; height: auto !important; border-radius: 8px; }
         .progress-bar { transition: width 0.3s ease; }
         .tab-active { background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.05); color: #2563eb; }
+        @media (max-width: 640px) { .qr-matrix { grid-template-columns: 1fr; width: 100%; margin-left: 0; transform: none; } }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen text-slate-900 pb-20">
@@ -55,11 +56,9 @@
             <div class="qr-matrix" id="qrContainer">
                 <canvas id="qr0"></canvas>
                 <canvas id="qr1"></canvas>
-                <canvas id="qr2"></canvas>
-                <canvas id="qr3"></canvas>
             </div>
             <div class="bg-white p-6 rounded-[2rem] text-center">
-                <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">正在循环生成随机喷泉包</p>
+                <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">正在发送数据与喷泉修复包</p>
                 <div id="sendStats" class="text-2xl font-mono font-black text-blue-600">0 Chunks</div>
                 <button id="btnFinishTransfer" onclick="finishCurrentTransfer()" class="mt-4 px-8 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold">停止发送</button>
             </div>
@@ -110,8 +109,9 @@
 
 <script>
 const SEGMENT_SIZE = 256 * 1024;
-const FOUNTAIN_CHUNK_SIZE = 220;
-const PROTOCOL_VERSION = "ASQ3";
+const FOUNTAIN_CHUNK_SIZE = 400;
+const SYSTEMATIC_SEED_BASE = 1000000;
+const PROTOCOL_VERSION = "ASQ4";
 
 const Utils = {
     PRNG: (s) => () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; },
@@ -150,15 +150,15 @@ async function sha256Hex(data) {
 }
 
 let sender = {
-    chunks: [], qrs: [], timer: null, fps: 10,
+    chunks: [], qrs: [], timer: null, fps: 15, systematicIndex: 0,
     file: null, fileName: "", fileSize: 0, transferId: "",
     segments: [], nextSegment: 0, activeSegment: -1,
     retransmitting: false, locked: false, mode: "", current: null
 };
 
 function initSender() {
-    for(let i=0; i<4; i++) {
-        sender.qrs[i] = new QRious({ element: document.getElementById(`qr${i}`), size: 300, level: 'L' });
+    for(let i=0; i<2; i++) {
+        sender.qrs[i] = new QRious({ element: document.getElementById(`qr${i}`), size: 480, level: 'L' });
     }
 }
 
@@ -236,6 +236,7 @@ async function startFileSegment(index) {
 
 function beginPacketStream(data, meta) {
     sender.chunks = [];
+    sender.systematicIndex = 0;
     for (let i = 0; i < data.length; i += FOUNTAIN_CHUNK_SIZE) {
         let chunk = data.slice(i, i + FOUNTAIN_CHUNK_SIZE);
         if (chunk.length < FOUNTAIN_CHUNK_SIZE) {
@@ -259,14 +260,20 @@ function tick() {
     if (!sender.current || sender.chunks.length === 0) return;
     const L = sender.chunks.length;
     const meta = sender.current;
-    for (let i = 0; i < 4; i++) {
-        const seed = Math.floor(Math.random() * 999999) + 1;
-        const rng = Utils.PRNG(seed);
-        const d = Math.min(L, Utils.getDegree(L, rng));
-        const idxs = [];
-        while (idxs.length < d) {
-            let x = Math.floor(rng() * L);
-            if (!idxs.includes(x)) idxs.push(x);
+    for (let i = 0; i < 2; i++) {
+        let seed, idxs;
+        if (sender.systematicIndex < L) {
+            seed = SYSTEMATIC_SEED_BASE + sender.systematicIndex;
+            idxs = [sender.systematicIndex++];
+        } else {
+            seed = Math.floor(Math.random() * 999999) + 1;
+            const rng = Utils.PRNG(seed);
+            const d = Math.min(L, Utils.getDegree(L, rng));
+            idxs = [];
+            while (idxs.length < d) {
+                let x = Math.floor(rng() * L);
+                if (!idxs.includes(x)) idxs.push(x);
+            }
         }
         const xorBuf = new Uint8Array(FOUNTAIN_CHUNK_SIZE);
         idxs.forEach(idx => Utils.xor(xorBuf, sender.chunks[idx]));
@@ -299,7 +306,7 @@ function finishCurrentTransfer() {
 let recv = {
     active: false, stream: null, fileId: "", kind: "", fileName: "", fileSize: 0,
     segmentCount: 0, segments: [], expectedSegment: 0, current: null,
-    isFinishing: false
+    isFinishing: false, scanFrame: 0
 };
 
 function showRecvNotice(message) {
@@ -333,13 +340,20 @@ async function startScanner(mode) {
     recv.active = true;
     const video = document.getElementById('rv');
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode } });
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 },
+                frameRate: { ideal: 30, max: 30 }
+            }
+        });
         video.srcObject = stream;
         recv.stream = stream;
         await video.play();
         video.classList.remove('hidden');
         ph.classList.add('hidden');
-        requestAnimationFrame(scanLoop);
+        recv.scanFrame = 0;
+        scheduleScan(video);
     } catch (e) { recv.active = false; ph.innerText = "摄像头启动失败: " + e.message; }
 }
 
@@ -356,8 +370,14 @@ async function startScreenScanner() {
         await video.play();
         video.classList.remove('hidden');
         ph.classList.add('hidden');
-        requestAnimationFrame(scanLoop);
+        recv.scanFrame = 0;
+        scheduleScan(video);
     } catch (e) { recv.active = false; ph.innerText = "录屏已取消"; }
+}
+
+function scheduleScan(video) {
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(scanLoop);
+    else requestAnimationFrame(scanLoop);
 }
 
 function scanLoop() {
@@ -365,27 +385,40 @@ function scanLoop() {
     const video = document.getElementById('rv');
     const canvas = document.getElementById('rc');
     if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
+        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(video, 0, 0);
-        
-        const w = canvas.width, h = canvas.height;
-        const regions = [
-            {x:0, y:0, w:w, h:h},
-            {x:0, y:0, w:w/2, h:h/2},
-            {x:w/2, y:0, w:w/2, h:h/2},
-            {x:0, y:h/2, w:w/2, h:h/2},
-            {x:w/2, y:h/2, w:w/2, h:h/2}
-        ];
 
-        regions.forEach(r => {
+        const w = canvas.width, h = canvas.height;
+        const halfW = Math.floor(w / 2), halfH = Math.floor(h / 2);
+        const decodeRegion = r => {
             const imgData = ctx.getImageData(r.x, r.y, r.w, r.h);
-            const code = jsQR(imgData.data, imgData.width, imgData.height);
-            if (code) handleFountainPacket(code.data);
-        });
+            return jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        };
+        const first = decodeRegion({x:0, y:0, w, h});
+        if (first) {
+            handleFountainPacket(first.data);
+            const points = [first.location.topLeftCorner, first.location.topRightCorner,
+                first.location.bottomLeftCorner, first.location.bottomRightCorner];
+            const center = points.reduce((p, point) => ({x:p.x + point.x / 4, y:p.y + point.y / 4}), {x:0, y:0});
+            const horizontal = Math.abs(center.x / w - 0.5) >= Math.abs(center.y / h - 0.5);
+            const opposite = horizontal
+                ? center.x < halfW ? {x:halfW, y:0, w:w-halfW, h} : {x:0, y:0, w:halfW, h}
+                : center.y < halfH ? {x:0, y:halfH, w, h:h-halfH} : {x:0, y:0, w, h:halfH};
+            const second = decodeRegion(opposite);
+            if (second) handleFountainPacket(second.data);
+        } else {
+            const fallback = recv.scanFrame++ % 2
+                ? [{x:0, y:0, w, h:halfH}, {x:0, y:halfH, w, h:h-halfH}]
+                : [{x:0, y:0, w:halfW, h}, {x:halfW, y:0, w:w-halfW, h}];
+            fallback.forEach(r => {
+                const code = decodeRegion(r);
+                if (code) handleFountainPacket(code.data);
+            });
+        }
     }
-    requestAnimationFrame(scanLoop);
+    scheduleScan(video);
 }
 
 function handleFountainPacket(raw) {
@@ -403,6 +436,7 @@ function handleFountainPacket(raw) {
     if (!/^[A-Z0-9]{6,32}$/.test(fileId) || !['F', 'T'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash)) return;
     if (![segmentIndex, segmentCount, seed, total, fileSize, segmentSize].every(Number.isSafeInteger)) return;
     if (segmentIndex < 0 || segmentCount < 1 || segmentIndex >= segmentCount || seed < 1 || total < 1 || fileSize < 1 || segmentSize < 1) return;
+    if (seed >= SYSTEMATIC_SEED_BASE && seed >= SYSTEMATIC_SEED_BASE + total) return;
 
     let fileName, data;
     try {
@@ -462,12 +496,17 @@ function handleFountainPacket(raw) {
 function processPacket(seed, L, data) {
     const state = recv.current;
     if (!state || state.verifying || recv.isFinishing) return;
-    const rng = Utils.PRNG(seed);
-    const d = Utils.getDegree(L, rng);
-    const idxs = [];
-    while (idxs.length < d) {
-        let x = Math.floor(rng() * L);
-        if (!idxs.includes(x)) idxs.push(x);
+    let idxs;
+    if (seed >= SYSTEMATIC_SEED_BASE) {
+        idxs = [seed - SYSTEMATIC_SEED_BASE];
+    } else {
+        const rng = Utils.PRNG(seed);
+        const d = Utils.getDegree(L, rng);
+        idxs = [];
+        while (idxs.length < d) {
+            let x = Math.floor(rng() * L);
+            if (!idxs.includes(x)) idxs.push(x);
+        }
     }
 
     if (L === 1) {
