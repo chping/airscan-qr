@@ -32,12 +32,20 @@
             <textarea id="inputText" class="w-full p-5 bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl h-32 focus:border-blue-500 outline-none text-sm mb-4" placeholder="输入文字或选择文件..."></textarea>
             
             <div id="fileInfo" class="hidden mb-4 p-4 bg-blue-50 rounded-2xl flex justify-between items-center">
-                <span id="fileName" class="text-xs font-bold text-blue-700 truncate mr-4"></span>
-                <button onclick="resetFile()" class="text-xs font-bold text-red-500">取消</button>
+                <div class="truncate mr-4">
+                    <p id="fileName" class="text-xs font-bold text-blue-700 truncate"></p>
+                    <p id="fileMeta" class="text-[10px] font-bold text-slate-400"></p>
+                </div>
+                <button id="btnCancelFile" onclick="resetFile()" class="text-xs font-bold text-red-500">取消</button>
+            </div>
+
+            <div id="segmentPanel" class="hidden mb-4 space-y-4">
+                <div id="segmentList" class="space-y-4"></div>
+                <p class="text-[10px] font-bold text-slate-400">接收端会在内存中保存全部分段，超大文件可能传输失败。</p>
             </div>
 
             <div class="grid grid-cols-2 gap-4">
-                <button onclick="document.getElementById('fileInput').click()" class="py-4 bg-gray-100 rounded-2xl font-bold text-sm">📎 选文件</button>
+                <button id="btnChooseFile" onclick="document.getElementById('fileInput').click()" class="py-4 bg-gray-100 rounded-2xl font-bold text-sm">📎 选文件</button>
                 <input type="file" id="fileInput" class="hidden">
                 <button id="btnStart" onclick="startSending()" class="py-4 bg-blue-600 text-white rounded-2xl font-bold text-sm shadow-xl">🚀 开始喷泉发射</button>
             </div>
@@ -53,7 +61,7 @@
             <div class="bg-white p-6 rounded-[2rem] text-center">
                 <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">正在循环生成随机喷泉包</p>
                 <div id="sendStats" class="text-2xl font-mono font-black text-blue-600">0 Chunks</div>
-                <button onclick="stopSending()" class="mt-4 px-8 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold">停止发送</button>
+                <button id="btnFinishTransfer" onclick="finishCurrentTransfer()" class="mt-4 px-8 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold">停止发送</button>
             </div>
         </div>
     </div>
@@ -72,6 +80,8 @@
                 <button onclick="startScreenScanner()" class="py-4 bg-indigo-600 text-white rounded-2xl font-bold text-sm shadow-lg">🖥️ 录屏接收</button>
             </div>
 
+            <p id="recvNotice" class="hidden mb-4 p-4 bg-blue-50 rounded-2xl text-xs font-bold text-blue-700"></p>
+
             <div id="recvProgress" class="hidden space-y-4">
                 <div class="flex justify-between items-end">
                     <div>
@@ -85,6 +95,8 @@
                 <div class="w-full h-4 bg-gray-100 rounded-full overflow-hidden">
                     <div id="progressBar" class="progress-bar h-full bg-blue-600 w-0"></div>
                 </div>
+                <div id="recvSegmentList" class="space-y-4"></div>
+                <button id="btnAbandonReceive" onclick="abandonReceive()" class="px-8 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold">放弃当前文件</button>
             </div>
         </div>
 
@@ -97,9 +109,11 @@
 </div>
 
 <script>
-/* --------- 工具函数 (喷泉码核心) --------- */
+const SEGMENT_SIZE = 512 * 1024;
+const FOUNTAIN_CHUNK_SIZE = 220;
+const PROTOCOL_VERSION = "ASQ2";
+
 const Utils = {
-    // 线性反馈随机数生成器 (确保发送接收同步)
     PRNG: (s) => () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; },
     xor: (a, b) => { for (let i = 0; i < a.length; i++) a[i] ^= b[i]; },
     u2b: (u8) => btoa(String.fromCharCode.apply(null, u8)),
@@ -118,10 +132,28 @@ const Utils = {
     }
 };
 
-/* --------- 发送端状态 --------- */
+function formatSize(bytes) {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(bytes % (1024 * 1024) ? 1 : 0)} MiB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(bytes % 1024 ? 1 : 0)} KiB`;
+    return `${bytes} B`;
+}
+
+function newTransferId() {
+    if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase();
+    return Math.random().toString(36).slice(2, 14).toUpperCase();
+}
+
+async function sha256Hex(data) {
+    if (!crypto.subtle) throw new Error("当前浏览器不支持 SHA-256");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+    return Array.from(digest, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 let sender = {
-    chunks: [], qrs: [], timer: null, tid: "", 
-    fileName: "", fileSize: 0, chunkSize: 220, fps: 10
+    chunks: [], qrs: [], timer: null, fps: 10,
+    file: null, fileName: "", fileSize: 0, transferId: "",
+    segments: [], nextSegment: 0, activeSegment: -1,
+    retransmitting: false, locked: false, mode: "", current: null
 };
 
 function initSender() {
@@ -130,44 +162,105 @@ function initSender() {
     }
 }
 
-async function startSending() {
-    const text = document.getElementById('inputText').value;
-    let dataU8;
-    if (sender.rawData) {
-        dataU8 = sender.rawData;
-    } else if (text) {
-        dataU8 = new TextEncoder().encode(text);
-        sender.fileName = "note_" + Date.now().toString().slice(-4) + ".txt";
-    } else {
-        return alert("请先输入内容");
-    }
+function setSenderLocked(locked) {
+    sender.locked = locked;
+    document.getElementById('btnChooseFile').disabled = locked;
+    document.getElementById('fileInput').disabled = locked;
+    document.getElementById('btnCancelFile').disabled = locked;
+    document.getElementById('btnStart').disabled = locked;
+    document.getElementById('inputText').disabled = locked || Boolean(sender.file);
+}
 
-    sender.fileSize = dataU8.length;
+function renderSenderSegments() {
+    const list = document.getElementById('segmentList');
+    list.innerHTML = sender.segments.map((segment, index) => {
+        const active = sender.activeSegment === index;
+        const completed = segment.status === 'completed';
+        const enabled = !sender.locked && (index === sender.nextSegment || completed);
+        const label = active ? '正在传输' : completed ? '重新传输' : index === sender.nextSegment ? '开始传输' : '等待前一段';
+        const status = active ? '传输中' : completed ? '已完成' : index === sender.nextSegment ? '可传输' : '等待';
+        return `<div class="p-4 bg-gray-100 rounded-2xl flex justify-between items-center">
+            <div><p class="text-xs font-bold text-slate-800">第 ${index + 1}/${sender.segments.length} 段</p><p class="text-[10px] font-bold text-slate-400">${formatSize(segment.size)} · ${status}</p></div>
+            <button onclick="startFileSegment(${index})" ${enabled ? '' : 'disabled'} class="px-8 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold" style="opacity:${enabled ? 1 : 0.45}">${label}</button>
+        </div>`;
+    }).join('');
+}
+
+async function startSending() {
+    if (sender.file || sender.locked) return;
+    const text = document.getElementById('inputText').value;
+    if (!text) return alert("请先输入内容");
+    const data = new TextEncoder().encode(text);
+    setSenderLocked(true);
+    sender.mode = 'text';
+    try {
+        const hash = await sha256Hex(data);
+        beginPacketStream(data, {
+            transferId: newTransferId(), kind: 'T', segmentIndex: 0, segmentCount: 1,
+            fileName: `note_${Date.now().toString().slice(-4)}.txt`, fileSize: data.length,
+            segmentSize: data.length, hash
+        });
+    } catch (e) {
+        sender.mode = '';
+        setSenderLocked(false);
+        alert(e.message);
+    }
+}
+
+async function startFileSegment(index) {
+    if (!sender.file || sender.locked) return;
+    const segment = sender.segments[index];
+    if (!segment || (index !== sender.nextSegment && segment.status !== 'completed')) return;
+
+    sender.activeSegment = index;
+    sender.retransmitting = segment.status === 'completed';
+    sender.mode = 'file';
+    setSenderLocked(true);
+    renderSenderSegments();
+    try {
+        const data = new Uint8Array(await sender.file.slice(segment.start, segment.end).arrayBuffer());
+        segment.hash ||= await sha256Hex(data);
+        beginPacketStream(data, {
+            transferId: sender.transferId, kind: 'F', segmentIndex: index,
+            segmentCount: sender.segments.length, fileName: sender.fileName,
+            fileSize: sender.fileSize, segmentSize: segment.size, hash: segment.hash
+        });
+    } catch (e) {
+        sender.activeSegment = -1;
+        sender.mode = '';
+        setSenderLocked(false);
+        renderSenderSegments();
+        alert(e.message);
+    }
+}
+
+function beginPacketStream(data, meta) {
     sender.chunks = [];
-    for (let i = 0; i < dataU8.length; i += sender.chunkSize) {
-        let chunk = dataU8.slice(i, i + sender.chunkSize);
-        if (chunk.length < sender.chunkSize) {
-            let padded = new Uint8Array(sender.chunkSize);
+    for (let i = 0; i < data.length; i += FOUNTAIN_CHUNK_SIZE) {
+        let chunk = data.slice(i, i + FOUNTAIN_CHUNK_SIZE);
+        if (chunk.length < FOUNTAIN_CHUNK_SIZE) {
+            const padded = new Uint8Array(FOUNTAIN_CHUNK_SIZE);
             padded.set(chunk);
             chunk = padded;
         }
         sender.chunks.push(chunk);
     }
-
-    sender.tid = Math.random().toString(36).slice(-3).toUpperCase();
+    sender.current = meta;
     document.getElementById('playerBox').classList.remove('hidden');
-    document.getElementById('sendStats').innerText = `${sender.chunks.length} Chunks`;
-    
-    initSender();
+    document.getElementById('sendStats').innerText = meta.kind === 'F'
+        ? `第 ${meta.segmentIndex + 1}/${meta.segmentCount} 段 · ${sender.chunks.length} Chunks`
+        : `${sender.chunks.length} Chunks`;
+    document.getElementById('btnFinishTransfer').innerText = meta.kind === 'F' ? '完成本段' : '停止发送';
+    tick();
     sender.timer = setInterval(tick, 1000 / sender.fps);
 }
 
 function tick() {
+    if (!sender.current || sender.chunks.length === 0) return;
     const L = sender.chunks.length;
-    const meta = encodeURIComponent(sender.fileName) + ":" + sender.fileSize;
-    // 同时更新4个QR
+    const meta = sender.current;
     for (let i = 0; i < 4; i++) {
-        const seed = Math.floor(Math.random() * 1000000);
+        const seed = Math.floor(Math.random() * 999999) + 1;
         const rng = Utils.PRNG(seed);
         const d = Math.min(L, Utils.getDegree(L, rng));
         const idxs = [];
@@ -175,25 +268,66 @@ function tick() {
             let x = Math.floor(rng() * L);
             if (!idxs.includes(x)) idxs.push(x);
         }
-        const xorBuf = new Uint8Array(sender.chunkSize);
+        const xorBuf = new Uint8Array(FOUNTAIN_CHUNK_SIZE);
         idxs.forEach(idx => Utils.xor(xorBuf, sender.chunks[idx]));
-        // 格式: ID|种子|总块数|数据|元数据
-        sender.qrs[i].value = `${sender.tid}|${seed}|${L}|${Utils.u2b(xorBuf)}|${meta}`;
+        sender.qrs[i].value = [
+            PROTOCOL_VERSION, meta.transferId, meta.kind, meta.segmentIndex, meta.segmentCount,
+            seed, L, Utils.u2b(xorBuf), encodeURIComponent(meta.fileName), meta.fileSize,
+            meta.segmentSize, meta.hash
+        ].join('|');
     }
 }
 
-function stopSending() {
+function finishCurrentTransfer() {
+    if (!sender.current) return;
     clearInterval(sender.timer);
+    sender.timer = null;
     document.getElementById('playerBox').classList.add('hidden');
+    if (sender.mode === 'file') {
+        const index = sender.activeSegment;
+        sender.segments[index].status = 'completed';
+        if (!sender.retransmitting && index === sender.nextSegment) sender.nextSegment++;
+        sender.activeSegment = -1;
+        sender.retransmitting = false;
+    }
+    sender.mode = '';
+    sender.current = null;
+    setSenderLocked(false);
+    if (sender.file) renderSenderSegments();
 }
 
-/* --------- 接收端状态 (核心解码) --------- */
 let recv = {
-    active: false, tid: "", total: 0, solved: {}, queue: [], 
-    fileName: "", fileSize: 0, startTime: 0, stream: null
+    active: false, stream: null, fileId: "", kind: "", fileName: "", fileSize: 0,
+    segmentCount: 0, segments: [], expectedSegment: 0, current: null,
+    isFinishing: false
 };
 
+function showRecvNotice(message) {
+    const notice = document.getElementById('recvNotice');
+    notice.innerText = message;
+    notice.classList.toggle('hidden', !message);
+}
+
+function clearReceiveSession() {
+    recv.fileId = '';
+    recv.kind = '';
+    recv.fileName = '';
+    recv.fileSize = 0;
+    recv.segmentCount = 0;
+    recv.segments = [];
+    recv.expectedSegment = 0;
+    recv.current = null;
+    recv.isFinishing = false;
+    document.getElementById('recvProgress').classList.add('hidden');
+    document.getElementById('successCard').classList.add('hidden');
+    document.getElementById('recvSegmentList').innerHTML = '';
+    document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('pctText').innerText = '0';
+    document.getElementById('btnAbandonReceive').classList.remove('hidden');
+}
+
 async function startScanner(mode) {
+    if (recv.isFinishing) clearReceiveSession();
     const ph = document.getElementById('readerPlaceholder');
     ph.innerText = "正在启动摄像头...";
     recv.active = true;
@@ -206,10 +340,11 @@ async function startScanner(mode) {
         video.classList.remove('hidden');
         ph.classList.add('hidden');
         requestAnimationFrame(scanLoop);
-    } catch (e) { ph.innerText = "摄像头启动失败: " + e.message; }
+    } catch (e) { recv.active = false; ph.innerText = "摄像头启动失败: " + e.message; }
 }
 
 async function startScreenScanner() {
+    if (recv.isFinishing) clearReceiveSession();
     const ph = document.getElementById('readerPlaceholder');
     ph.innerText = "请在系统弹窗中选择屏幕...";
     recv.active = true;
@@ -222,7 +357,7 @@ async function startScreenScanner() {
         video.classList.remove('hidden');
         ph.classList.add('hidden');
         requestAnimationFrame(scanLoop);
-    } catch (e) { ph.innerText = "录屏已取消"; }
+    } catch (e) { recv.active = false; ph.innerText = "录屏已取消"; }
 }
 
 function scanLoop() {
@@ -235,14 +370,13 @@ function scanLoop() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
         
-        // 分块扫描优化：分别扫描全屏和四个象限（适配矩阵QR）
         const w = canvas.width, h = canvas.height;
         const regions = [
-            {x:0, y:0, w:w, h:h}, // 全屏
-            {x:0, y:0, w:w/2, h:h/2}, // 左上
-            {x:w/2, y:0, w:w/2, h:h/2}, // 右上
-            {x:0, y:h/2, w:w/2, h:h/2}, // 左下
-            {x:w/2, y:h/2, w:w/2, h:h/2} // 右下
+            {x:0, y:0, w:w, h:h},
+            {x:0, y:0, w:w/2, h:h/2},
+            {x:w/2, y:0, w:w/2, h:h/2},
+            {x:0, y:h/2, w:w/2, h:h/2},
+            {x:w/2, y:h/2, w:w/2, h:h/2}
         ];
 
         regions.forEach(r => {
@@ -257,27 +391,77 @@ function scanLoop() {
 function handleFountainPacket(raw) {
     if (!recv.active || recv.isFinishing) return;
     const p = raw.split('|');
-    if (p.length < 5) return;
-    const [tid, seed, total, b64, meta] = [p[0], parseInt(p[1]), parseInt(p[2]), p[3], p[4]];
+    if (p[0] !== PROTOCOL_VERSION) {
+        if (p.length >= 5) showRecvNotice('二维码协议版本不匹配，请更新两端页面。');
+        return;
+    }
+    if (p.length !== 12) return;
 
-    if (recv.tid !== tid) {
-        recv.tid = tid; recv.total = total; recv.solved = {}; recv.queue = [];
-        recv.startTime = Date.now(); recv.isFinishing = false;
-        const [n, s] = meta.split(':');
-        recv.fileName = decodeURIComponent(n); recv.fileSize = parseInt(s);
-        recv.currentChunkSize = Utils.b2u(b64).length; // 动态识别块大小
+    const [fileId, kind, encodedName, hash] = [p[1], p[2], p[8], p[11]];
+    const [segmentIndex, segmentCount, seed, total, fileSize, segmentSize] =
+        [p[3], p[4], p[5], p[6], p[9], p[10]].map(Number);
+    if (!/^[A-Z0-9]{6,32}$/.test(fileId) || !['F', 'T'].includes(kind) || !/^[a-f0-9]{64}$/.test(hash)) return;
+    if (![segmentIndex, segmentCount, seed, total, fileSize, segmentSize].every(Number.isSafeInteger)) return;
+    if (segmentIndex < 0 || segmentCount < 1 || segmentIndex >= segmentCount || seed < 1 || total < 1 || fileSize < 1 || segmentSize < 1) return;
+
+    let fileName, data;
+    try {
+        fileName = decodeURIComponent(encodedName);
+        data = Utils.b2u(p[7]);
+    } catch (_) { return; }
+    if (!fileName || data.length !== FOUNTAIN_CHUNK_SIZE || total !== Math.ceil(segmentSize / FOUNTAIN_CHUNK_SIZE)) return;
+    if (kind === 'F') {
+        if (segmentCount !== Math.ceil(fileSize / SEGMENT_SIZE) || segmentSize > SEGMENT_SIZE) return;
+        if (segmentSize !== Math.min(SEGMENT_SIZE, fileSize - segmentIndex * SEGMENT_SIZE)) return;
+    } else if (segmentCount !== 1 || segmentIndex !== 0 || segmentSize !== fileSize) return;
+
+    if (recv.fileId && recv.fileId !== fileId) {
+        showRecvNotice(`正在接收 ${recv.fileName}，如需切换请先放弃当前文件。`);
+        return;
+    }
+    if (!recv.fileId) {
+        if (segmentIndex !== 0) {
+            showRecvNotice('请从第 1 段开始传输。');
+            return;
+        }
+        recv.fileId = fileId;
+        recv.kind = kind;
+        recv.fileName = fileName;
+        recv.fileSize = fileSize;
+        recv.segmentCount = segmentCount;
+        recv.expectedSegment = 0;
+        recv.segments = Array.from({length: segmentCount}, (_, index) => ({
+            size: kind === 'F' ? Math.min(SEGMENT_SIZE, fileSize - index * SEGMENT_SIZE) : fileSize,
+            data: null, hash: '', percent: 0
+        }));
         document.getElementById('recvProgress').classList.remove('hidden');
         document.getElementById('recvName').innerText = recv.fileName;
         document.getElementById('successCard').classList.add('hidden');
+        document.getElementById('btnAbandonReceive').classList.remove('hidden');
+        showRecvNotice('');
+        renderRecvSegments();
+        updateOverallProgress();
     }
 
-    if (Object.keys(recv.solved).length < recv.total) {
-        processPacket(seed, total, Utils.b2u(b64));
+    if (recv.kind !== kind || recv.fileName !== fileName || recv.fileSize !== fileSize || recv.segmentCount !== segmentCount) return;
+    if (segmentIndex < recv.expectedSegment) return;
+    if (segmentIndex > recv.expectedSegment) {
+        showRecvNotice(`请重新传输第 ${recv.expectedSegment + 1} 段，完成后才能接收后续分段。`);
+        return;
     }
+    if (!recv.current) {
+        recv.current = {
+            index: segmentIndex, total, segmentSize, hash, chunkSize: data.length,
+            solved: {}, queue: [], verifying: false
+        };
+    }
+    if (recv.current.index !== segmentIndex || recv.current.total !== total || recv.current.segmentSize !== segmentSize || recv.current.hash !== hash) return;
+    if (!recv.current.verifying && Object.keys(recv.current.solved).length < total) processPacket(seed, total, data);
 }
 
 function processPacket(seed, L, data) {
-    if (recv.isFinishing) return;
+    const state = recv.current;
+    if (!state || state.verifying || recv.isFinishing) return;
     const rng = Utils.PRNG(seed);
     const d = Utils.getDegree(L, rng);
     const idxs = [];
@@ -287,10 +471,8 @@ function processPacket(seed, L, data) {
     }
 
     if (L === 1) {
-        if (!recv.solved[0]) { 
-            recv.solved[0] = data; 
-        }
-        updateRecvUI(); // 确保即便已存在也触发一次UI检查，以防万一
+        if (!state.solved[0]) state.solved[0] = data;
+        updateRecvUI();
         return;
     }
 
@@ -298,11 +480,11 @@ function processPacket(seed, L, data) {
     let curIdxs = idxs.sort((a, b) => a - b);
     for (let i = 0; i < curIdxs.length; i++) {
         const idx = curIdxs[i];
-        if (recv.solved[idx]) { Utils.xor(curData, recv.solved[idx]); curIdxs.splice(i, 1); i--; }
+        if (state.solved[idx]) { Utils.xor(curData, state.solved[idx]); curIdxs.splice(i, 1); i--; }
     }
     if (curIdxs.length === 0) return;
 
-    for (let item of recv.queue) {
+    for (let item of state.queue) {
         if (curIdxs.length === 0) break;
         if (item.idxs[0] === curIdxs[0]) {
             Utils.xor(curData, item.u8);
@@ -311,21 +493,21 @@ function processPacket(seed, L, data) {
     }
 
     if (curIdxs.length > 0) {
-        recv.queue.push({ idxs: curIdxs, u8: curData });
-        recv.queue.sort((a, b) => a.idxs[0] - b.idxs[0]);
+        state.queue.push({ idxs: curIdxs, u8: curData });
+        state.queue.sort((a, b) => a.idxs[0] - b.idxs[0]);
     }
 
     let foundNew = true;
     while (foundNew) {
         foundNew = false;
-        for (let i = 0; i < recv.queue.length; i++) {
-            if (recv.queue[i].idxs.length === 1) {
-                const sIdx = recv.queue[i].idxs[0];
-                const sData = recv.queue[i].u8;
-                recv.solved[sIdx] = sData;
-                recv.queue.splice(i, 1);
+        for (let i = 0; i < state.queue.length; i++) {
+            if (state.queue[i].idxs.length === 1) {
+                const sIdx = state.queue[i].idxs[0];
+                const sData = state.queue[i].u8;
+                state.solved[sIdx] = sData;
+                state.queue.splice(i, 1);
                 foundNew = true;
-                recv.queue.forEach(it => {
+                state.queue.forEach(it => {
                     if (it.idxs.includes(sIdx)) { Utils.xor(it.u8, sData); it.idxs = it.idxs.filter(id => id !== sIdx); }
                 });
                 break;
@@ -342,13 +524,87 @@ function xorIdxLists(a, b) {
 }
 
 function updateRecvUI() {
-    const done = Object.keys(recv.solved).length;
-    const pct = Math.min(100, Math.floor((done / recv.total) * 100));
+    const state = recv.current;
+    if (!state) return;
+    const done = Object.keys(state.solved).length;
+    const pct = Math.min(100, Math.floor((done / state.total) * 100));
+    if (recv.segments[state.index].percent !== pct) {
+        recv.segments[state.index].percent = pct;
+        renderRecvSegments();
+    }
+    document.getElementById('recvRank').innerText = `第 ${state.index + 1}/${recv.segmentCount} 段 · Rank: ${done}/${state.total}`;
+    updateOverallProgress();
+    if (done >= state.total) finalizeSegment();
+}
+
+function renderRecvSegments() {
+    document.getElementById('recvSegmentList').innerHTML = recv.segments.map((segment, index) => {
+        let status = '等待';
+        if (segment.data) status = '已完成';
+        else if (recv.current?.index === index) status = recv.current.verifying ? '校验中' : `接收中 ${segment.percent}%`;
+        return `<div class="p-4 bg-gray-100 rounded-2xl flex justify-between items-center"><span class="text-xs font-bold text-slate-800">第 ${index + 1}/${recv.segmentCount} 段</span><span class="text-[10px] font-bold text-slate-400">${formatSize(segment.size)} · ${status}</span></div>`;
+    }).join('');
+}
+
+function updateOverallProgress() {
+    if (!recv.fileSize) return;
+    let received = recv.segments.reduce((sum, segment) => sum + (segment.data ? segment.size : 0), 0);
+    if (recv.current && !recv.segments[recv.current.index].data) {
+        const done = Object.keys(recv.current.solved).length;
+        received += recv.current.segmentSize * done / recv.current.total;
+    }
+    const pct = Math.min(100, Math.floor(received / recv.fileSize * 100));
     document.getElementById('progressBar').style.width = pct + '%';
     document.getElementById('pctText').innerText = pct;
-    document.getElementById('recvRank').innerText = `Rank: ${done} / ${recv.total}`;
-    
-    if (done >= recv.total) finalizeRecv();
+}
+
+async function finalizeSegment() {
+    const state = recv.current;
+    if (!state || state.verifying) return;
+    state.verifying = true;
+    renderRecvSegments();
+
+    const segmentData = new Uint8Array(state.segmentSize);
+    for (let i = 0; i < state.total; i++) {
+        const start = i * state.chunkSize;
+        const len = Math.min(state.chunkSize, state.segmentSize - start);
+        segmentData.set(state.solved[i].slice(0, len), start);
+    }
+
+    const fileId = recv.fileId;
+    const index = state.index;
+    let actualHash;
+    try { actualHash = await sha256Hex(segmentData); }
+    catch (e) {
+        state.verifying = false;
+        showRecvNotice(e.message);
+        return;
+    }
+    if (recv.fileId !== fileId || recv.current !== state) return;
+    if (actualHash !== state.hash) {
+        recv.segments[index].percent = 0;
+        recv.current = {
+            index, total: state.total, segmentSize: state.segmentSize, hash: state.hash,
+            chunkSize: state.chunkSize, solved: {}, queue: [], verifying: false
+        };
+        showRecvNotice(`第 ${index + 1} 段校验失败，正在重新接收。`);
+        renderRecvSegments();
+        updateOverallProgress();
+        return;
+    }
+
+    recv.segments[index].data = segmentData;
+    recv.segments[index].hash = actualHash;
+    recv.segments[index].percent = 100;
+    recv.expectedSegment++;
+    recv.current = null;
+    renderRecvSegments();
+    updateOverallProgress();
+    if (recv.expectedSegment >= recv.segmentCount) finalizeRecv();
+    else {
+        document.getElementById('recvRank').innerText = `等待第 ${recv.expectedSegment + 1}/${recv.segmentCount} 段`;
+        showRecvNotice(`第 ${index + 1} 段已完成，请发送下一段。`);
+    }
 }
 
 function finalizeRecv() {
@@ -356,53 +612,94 @@ function finalizeRecv() {
     recv.isFinishing = true;
     recv.active = false;
     if(recv.stream) { recv.stream.getTracks().forEach(t => t.stop()); recv.stream = null; }
-    
-    const finalU8 = new Uint8Array(recv.fileSize);
-    for (let i = 0; i < recv.total; i++) {
-        const start = i * recv.currentChunkSize; 
-        if (start < recv.fileSize) {
-            const len = Math.min(recv.currentChunkSize, recv.fileSize - start);
-            if (recv.solved[i]) finalU8.set(recv.solved[i].slice(0, len), start);
-        }
+
+    let finalU8;
+    try {
+        finalU8 = new Uint8Array(recv.fileSize);
+        let offset = 0;
+        recv.segments.forEach(segment => { finalU8.set(segment.data, offset); offset += segment.size; });
+    } catch (_) {
+        recv.isFinishing = false;
+        showRecvNotice('浏览器内存不足，无法合并文件。');
+        return;
     }
 
     const blob = new Blob([finalU8], { type: 'application/octet-stream' });
     document.getElementById('successCard').classList.remove('hidden');
-    document.getElementById('finInfo').innerText = `${recv.fileName} (${(recv.fileSize/1024).toFixed(1)} KB)`;
+    document.getElementById('finInfo').innerText = `${recv.fileName} (${formatSize(recv.fileSize)})`;
     document.getElementById('dlBtn').onclick = () => {
-        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-        a.download = recv.fileName; a.click();
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url; a.download = recv.fileName; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
     };
+    document.getElementById('btnAbandonReceive').classList.add('hidden');
+    document.getElementById('recvRank').innerText = '全部分段校验完成';
+    showRecvNotice('');
 }
 
-/* --------- UI 基础逻辑 --------- */
+function abandonReceive() {
+    if (!recv.fileId || !confirm(`确定放弃 ${recv.fileName} 的接收进度吗？`)) return;
+    clearReceiveSession();
+    showRecvNotice('已放弃当前文件，可以接收新文件。');
+}
+
 function switchTab(t) {
+    if (t === 'receive' && sender.locked) return alert('请先完成当前传输。');
     document.getElementById('panel-send').classList.toggle('hidden', t!=='send');
     document.getElementById('panel-receive').classList.toggle('hidden', t!=='receive');
     document.getElementById('tab-s').className = t==='send' ? 'flex-1 py-2 rounded-xl tab-active' : 'flex-1 py-2 rounded-xl text-slate-500';
     document.getElementById('tab-r').className = t==='receive' ? 'flex-1 py-2 rounded-xl tab-active' : 'flex-1 py-2 rounded-xl text-slate-500';
-    if(t === 'send') { recv.active = false; if(recv.stream) recv.stream.getTracks().forEach(t=>t.stop()); }
+    if(t === 'send') {
+        recv.active = false;
+        if(recv.stream) recv.stream.getTracks().forEach(t=>t.stop());
+        recv.stream = null;
+    }
 }
 
 document.getElementById('fileInput').onchange = (e) => {
     const f = e.target.files[0]; if(!f) return;
+    if (f.size === 0) {
+        e.target.value = '';
+        return alert('空文件无需传输');
+    }
+    sender.file = f;
     sender.fileName = f.name;
-    const r = new FileReader();
-    r.onload = (ev) => {
-        sender.rawData = new Uint8Array(ev.target.result);
-        document.getElementById('fileInfo').classList.remove('hidden');
-        document.getElementById('fileName').innerText = f.name;
-    };
-    r.readAsArrayBuffer(f);
+    sender.fileSize = f.size;
+    sender.transferId = newTransferId();
+    sender.nextSegment = 0;
+    sender.activeSegment = -1;
+    sender.segments = [];
+    for (let start = 0; start < f.size; start += SEGMENT_SIZE) {
+        const end = Math.min(start + SEGMENT_SIZE, f.size);
+        sender.segments.push({start, end, size: end - start, status: 'waiting', hash: ''});
+    }
+    document.getElementById('fileInfo').classList.remove('hidden');
+    document.getElementById('segmentPanel').classList.remove('hidden');
+    document.getElementById('fileName').innerText = f.name;
+    document.getElementById('fileMeta').innerText = `${formatSize(f.size)} · ${sender.segments.length} 段`;
+    document.getElementById('btnStart').classList.add('hidden');
+    document.getElementById('inputText').disabled = true;
+    renderSenderSegments();
 };
 
 function resetFile() {
-    sender.rawData = null;
+    if (sender.locked) return;
+    sender.file = null;
+    sender.fileName = '';
+    sender.fileSize = 0;
+    sender.transferId = '';
+    sender.segments = [];
+    sender.nextSegment = 0;
+    sender.activeSegment = -1;
     document.getElementById('fileInfo').classList.add('hidden');
+    document.getElementById('segmentPanel').classList.add('hidden');
+    document.getElementById('segmentList').innerHTML = '';
     document.getElementById('fileInput').value = '';
+    document.getElementById('btnStart').classList.remove('hidden');
+    document.getElementById('inputText').disabled = false;
 }
 
-// 初始化
 initSender();
 </script>
 </body>
