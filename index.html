@@ -150,7 +150,7 @@ async function sha256Hex(data) {
 }
 
 let sender = {
-    chunks: [], qrs: [], timer: null, fps: 10,
+    chunks: [], qrs: [], timer: null, fps: 15,
     file: null, fileName: "", fileSize: 0, transferId: "",
     segments: [], nextSegment: 0, activeSegment: -1,
     retransmitting: false, locked: false, mode: "", current: null
@@ -339,7 +339,7 @@ async function startScanner(mode) {
         await video.play();
         video.classList.remove('hidden');
         ph.classList.add('hidden');
-        requestAnimationFrame(scanLoop);
+        scheduleScan(video);
     } catch (e) { recv.active = false; ph.innerText = "摄像头启动失败: " + e.message; }
 }
 
@@ -356,8 +356,13 @@ async function startScreenScanner() {
         await video.play();
         video.classList.remove('hidden');
         ph.classList.add('hidden');
-        requestAnimationFrame(scanLoop);
+        scheduleScan(video);
     } catch (e) { recv.active = false; ph.innerText = "录屏已取消"; }
+}
+
+function scheduleScan(video) {
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(scanLoop);
+    else requestAnimationFrame(scanLoop);
 }
 
 function scanLoop() {
@@ -381,11 +386,11 @@ function scanLoop() {
 
         regions.forEach(r => {
             const imgData = ctx.getImageData(r.x, r.y, r.w, r.h);
-            const code = jsQR(imgData.data, imgData.width, imgData.height);
+            const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
             if (code) handleFountainPacket(code.data);
         });
     }
-    requestAnimationFrame(scanLoop);
+    scheduleScan(video);
 }
 
 function handleFountainPacket(raw) {
