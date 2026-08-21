@@ -1,0 +1,44 @@
+{
+  "lib/html5-qrcode.min.js": {
+    "mtime": 1785915277.5012195,
+    "seen": 1787291644.059155,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "lib/jsQR.min.js": {
+    "mtime": 1785915233.11872,
+    "seen": 1787291644.059156,
+    "ast_hash": "eb173922770d8367569d7d531f76f78d",
+    "semantic_hash": "eb173922770d8367569d7d531f76f78d"
+  },
+  "lib/qrious.min.js": {
+    "mtime": 1785915255.6035151,
+    "seen": 1787291644.059157,
+    "ast_hash": "ea58889c516e953d6e78ca4834f834c4",
+    "semantic_hash": "ea58889c516e953d6e78ca4834f834c4"
+  },
+  ".github/workflows/static.yml": {
+    "mtime": 1786278550.5631146,
+    "seen": 1787291644.059158,
+    "ast_hash": "4bbcd37da310febbd93503bd5d458eb7",
+    "semantic_hash": "4bbcd37da310febbd93503bd5d458eb7"
+  },
+  "README.md": {
+    "mtime": 1785915096.5262718,
+    "seen": 1787291644.059158,
+    "ast_hash": "28bbc4695c2bdccb9f366ddeef66c58e",
+    "semantic_hash": "28bbc4695c2bdccb9f366ddeef66c58e"
+  },
+  "index.html": {
+    "mtime": 1786281072.9526093,
+    "seen": 1787291644.059158,
+    "ast_hash": "05e38c21b6bf3b696f0aca1174d88c55",
+    "semantic_hash": "05e38c21b6bf3b696f0aca1174d88c55"
+  },
+  "sender.html": {
+    "mtime": 1786284035.4227424,
+    "seen": 1787291644.059159,
+    "ast_hash": "3db9bc81cf54ca7167c2ec04e0e41feb",
+    "semantic_hash": "3db9bc81cf54ca7167c2ec04e0e41feb"
+  }
+}

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>graphify - graphify-out/graph.html</title>
+<script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"
+        integrity="sha384-Ux6phic9PEHJ38YtrijhkzyJ8yQlH8i/+buBR8s3mAZOJrP1gwyvAcIYl3GWtpX1"
+        crossorigin="anonymous"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f1a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #graph { flex: 1; }
+  #sidebar { width: 280px; background: #1a1a2e; border-left: 1px solid #2a2a4e; display: flex; flex-direction: column; overflow: hidden; }
+  #search-wrap { padding: 12px; border-bottom: 1px solid #2a2a4e; }
+  #search { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+  #search:focus { border-color: #4E79A7; }
+  #search-results { max-height: 140px; overflow-y: auto; padding: 4px 12px; border-bottom: 1px solid #2a2a4e; display: none; }
+  .search-item { padding: 4px 6px; cursor: pointer; border-radius: 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-item:hover { background: #2a2a4e; }
+  #info-panel { padding: 14px; border-bottom: 1px solid #2a2a4e; min-height: 140px; }
+  #info-panel h3 { font-size: 13px; color: #aaa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  #info-content { font-size: 13px; color: #ccc; line-height: 1.6; }
+  #info-content .field { margin-bottom: 5px; }
+  #info-content .field b { color: #e0e0e0; }
+  #info-content .empty { color: #555; font-style: italic; }
+  .neighbor-link { display: block; padding: 2px 6px; margin: 2px 0; border-radius: 3px; cursor: pointer; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid #333; }
+  .neighbor-link:hover { background: #2a2a4e; }
+  #neighbors-list { max-height: 160px; overflow-y: auto; margin-top: 4px; }
+  #legend-wrap { flex: 1; overflow-y: auto; padding: 12px; }
+  #legend-wrap h3 { font-size: 13px; color: #aaa; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; border-radius: 4px; font-size: 12px; }
+  .legend-item:hover { background: #2a2a4e; padding-left: 4px; }
+  .legend-item.dimmed { opacity: 0.35; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .legend-count { color: #666; font-size: 11px; }
+  #stats { padding: 10px 14px; border-top: 1px solid #2a2a4e; font-size: 11px; color: #555; }
+  #legend-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 4px 0; }
+  #legend-controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #aaa; user-select: none; }
+  #legend-controls label:hover { color: #e0e0e0; }
+  .legend-cb, #select-all-cb { appearance: none; -webkit-appearance: none; width: 14px; height: 14px; border: 1.5px solid #3a3a5e; border-radius: 3px; background: #0f0f1a; cursor: pointer; position: relative; flex-shrink: 0; }
+  .legend-cb:checked, #select-all-cb:checked { background: #4E79A7; border-color: #4E79A7; }
+  .legend-cb:checked::after, #select-all-cb:checked::after { content: ''; position: absolute; left: 3.5px; top: 1px; width: 4px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  #select-all-cb:indeterminate { background: #4E79A7; border-color: #4E79A7; }
+  #select-all-cb:indeterminate::after { content: ''; position: absolute; left: 2px; top: 5px; width: 8px; height: 2px; background: #fff; border: none; transform: none; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<div id="sidebar">
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <div id="info-panel">
+    <h3>Node Info</h3>
+    <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
+  </div>
+  <div id="legend-wrap">
+    <h3>Communities</h3>
+    <div id="legend-controls">
+      <label><input type="checkbox" id="select-all-cb" checked onchange="toggleAllCommunities(!this.checked)">Select All</label>
+    </div>
+    <div id="legend"></div>
+  </div>
+  <div id="stats">77 nodes &middot; 117 edges &middot; 10 communities</div>
+</div>
+<script>
+const RAW_NODES = [{"id": "lib_jsqr_min_a", "label": "a()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "a()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 4}, {"id": "lib_jsqr_min_b", "label": "B()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "B()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 4}, {"id": "lib_jsqr_min_c", "label": "c()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "c()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 5}, {"id": "lib_jsqr_min_d", "label": "d()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 26.4, "font": {"size": 12, "color": "#ffffff"}, "title": "d()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 6}, {"id": "lib_jsqr_min_i", "label": "i()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "i()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 5}, {"id": "lib_jsqr_min_k", "label": "k()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "k()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 5}, {"id": "lib_jsqr_min_l", "label": "l()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "l()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 2}, {"id": "lib_jsqr_min_n", "label": "n()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "n()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 5}, {"id": "lib_jsqr_min_o", "label": "o()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "o()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 1}, {"id": "lib_jsqr_min_r", "label": "r()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "r()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 1}, {"id": "lib_jsqr_min_s", "label": "s()", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "s()", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 2}, {"id": "lib_qrious_min_e", "label": "e()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "e()", "community": 7, "community_name": "QRious Library", "source_file": "lib/qrious.min.js", "file_type": "code", "degree": 3}, {"id": "lib_qrious_min_i", "label": "i()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "i()", "community": 7, "community_name": "QRious Library", "source_file": "lib/qrious.min.js", "file_type": "code", "degree": 3}, {"id": "lib_qrious_min_n", "label": "n()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "n()", "community": 7, "community_name": "QRious Library", "source_file": "lib/qrious.min.js", "file_type": "code", "degree": 1}, {"id": "lib_qrious_min_t", "label": "t()", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "t()", "community": 7, "community_name": "QRious Library", "source_file": "lib/qrious.min.js", "file_type": "code", "degree": 4}, {"id": "lib_jsqr_min", "label": "jsQR.min.js", "color": {"background": "#F28E2B", "border": "#F28E2B", "highlight": {"background": "#ffffff", "border": "#F28E2B"}}, "size": 40.0, "font": {"size": 12, "color": "#ffffff"}, "title": "jsQR.min.js", "community": 1, "community_name": "jsQR Library", "source_file": "lib/jsQR.min.js", "file_type": "code", "degree": 11}, {"id": "lib_qrious_min", "label": "qrious.min.js", "color": {"background": "#FF9DA7", "border": "#FF9DA7", "highlight": {"background": "#ffffff", "border": "#FF9DA7"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "qrious.min.js", "community": 7, "community_name": "QRious Library", "source_file": "lib/qrious.min.js", "file_type": "code", "degree": 4}, {"id": "lib_html5_qrcode_min", "label": "html5-qrcode.min.js", "color": {"background": "#9C755F", "border": "#9C755F", "highlight": {"background": "#ffffff", "border": "#9C755F"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "html5-qrcode.min.js", "community": 8, "community_name": "Unused HTML5 QR", "source_file": "lib/html5-qrcode.min.js", "file_type": "code", "degree": 0}, {"id": "index_beginpacketstream", "label": "beginPacketStream", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "beginPacketStream", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 5}, {"id": "index_processpacket", "label": "processPacket", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 29.1, "font": {"size": 12, "color": "#ffffff"}, "title": "processPacket", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 7}, {"id": "index_tick", "label": "tick", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 29.1, "font": {"size": 12, "color": "#ffffff"}, "title": "tick", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 7}, {"id": "index_utils_getdegree", "label": "Utils.getDegree", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Utils.getDegree", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_utils_prng", "label": "Utils.PRNG", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Utils.PRNG", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_utils_u2b", "label": "Utils.u2b", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.u2b", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 1}, {"id": "index_utils_xor", "label": "Utils.xor", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Utils.xor", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_xoridxlists", "label": "xorIdxLists", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "xorIdxLists", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "code", "degree": 1}, {"id": "sender_beginpacketstream", "label": "beginPacketStream", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "beginPacketStream", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 5}, {"id": "sender_tick", "label": "tick", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 29.1, "font": {"size": 12, "color": "#ffffff"}, "title": "tick", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 7}, {"id": "sender_utils_getdegree", "label": "Utils.getDegree", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.getDegree", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "sender_utils_prng", "label": "Utils.PRNG", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.PRNG", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "sender_utils_u2b", "label": "Utils.u2b", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.u2b", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "sender_utils_xor", "label": "Utils.xor", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.xor", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "index_asq3_fountain_protocol", "label": "ASQ3 Fountain Protocol", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 23.6, "font": {"size": 12, "color": "#ffffff"}, "title": "ASQ3 Fountain Protocol", "community": 0, "community_name": "Fountain Protocol", "source_file": "index.html", "file_type": "concept", "degree": 5}, {"id": "sender_asq3_fountain_protocol", "label": "ASQ3 Fountain Protocol", "color": {"background": "#4E79A7", "border": "#4E79A7", "highlight": {"background": "#ffffff", "border": "#4E79A7"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "ASQ3 Fountain Protocol", "community": 0, "community_name": "Fountain Protocol", "source_file": "sender.html", "file_type": "concept", "degree": 3}, {"id": "index_finalizerecv", "label": "finalizeRecv", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "finalizeRecv", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 4}, {"id": "index_finalizesegment", "label": "finalizeSegment", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 29.1, "font": {"size": 12, "color": "#ffffff"}, "title": "finalizeSegment", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 7}, {"id": "index_formatsize", "label": "formatSize", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "formatSize", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_handlefountainpacket", "label": "handleFountainPacket", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 31.8, "font": {"size": 12, "color": "#ffffff"}, "title": "handleFountainPacket", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 8}, {"id": "index_renderrecvsegments", "label": "renderRecvSegments", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "renderRecvSegments", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 4}, {"id": "index_showrecvnotice", "label": "showRecvNotice", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "showRecvNotice", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 4}, {"id": "index_updateoverallprogress", "label": "updateOverallProgress", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "updateOverallProgress", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_updaterecvui", "label": "updateRecvUI", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "updateRecvUI", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 4}, {"id": "index_utils_b2u", "label": "Utils.b2u", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Utils.b2u", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "code", "degree": 1}, {"id": "index_sha_256_segment_integrity", "label": "SHA-256 Segment Integrity", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "SHA-256 Segment Integrity", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "concept", "degree": 1}, {"id": "index_in_memory_file_reassembly", "label": "In-Memory File Reassembly", "color": {"background": "#E15759", "border": "#E15759", "highlight": {"background": "#ffffff", "border": "#E15759"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "In-Memory File Reassembly", "community": 2, "community_name": "Receive Reassembly", "source_file": "index.html", "file_type": "rationale", "degree": 1}, {"id": "sender_finishcurrenttransfer", "label": "finishCurrentTransfer", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "finishCurrentTransfer", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 2}, {"id": "sender_newtransferid", "label": "newTransferId", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "newTransferId", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "sender_rendersendersegments", "label": "renderSenderSegments", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "renderSenderSegments", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 2}, {"id": "sender_setsenderlocked", "label": "setSenderLocked", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "setSenderLocked", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 3}, {"id": "sender_sha256hex", "label": "sha256Hex", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "sha256Hex", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 2}, {"id": "sender_startfilesegment", "label": "startFileSegment", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 26.4, "font": {"size": 12, "color": "#ffffff"}, "title": "startFileSegment", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 6}, {"id": "sender_startsending", "label": "startSending", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "startSending", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "code", "degree": 4}, {"id": "index_segmented_transfer", "label": "Sequential Segmented Transfer", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "Sequential Segmented Transfer", "community": 3, "community_name": "Segmented Send Flow", "source_file": "index.html", "file_type": "rationale", "degree": 3}, {"id": "sender_segmented_transfer", "label": "Sequential Segmented Transfer", "color": {"background": "#76B7B2", "border": "#76B7B2", "highlight": {"background": "#ffffff", "border": "#76B7B2"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Sequential Segmented Transfer", "community": 3, "community_name": "Segmented Send Flow", "source_file": "sender.html", "file_type": "rationale", "degree": 2}, {"id": "_github_workflows_static_deploy", "label": "Deploy Job", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Deploy Job", "community": 4, "community_name": "Deployment and Docs", "source_file": ".github/workflows/static.yml", "file_type": "code", "degree": 2}, {"id": "_github_workflows_static_upload_artifact", "label": "Upload Entire Repository Artifact", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "Upload Entire Repository Artifact", "community": 4, "community_name": "Deployment and Docs", "source_file": ".github/workflows/static.yml", "file_type": "code", "degree": 4}, {"id": "index_airscan_qr_fountain", "label": "AirScan-QR Fountain Application", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "AirScan-QR Fountain Application", "community": 4, "community_name": "Deployment and Docs", "source_file": "index.html", "file_type": "code", "degree": 1}, {"id": "sender_airscan_qr_fountain_sender", "label": "AirScan-QR Fountain Sender", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "AirScan-QR Fountain Sender", "community": 4, "community_name": "Deployment and Docs", "source_file": "sender.html", "file_type": "code", "degree": 1}, {"id": "_github_workflows_static_github_pages", "label": "GitHub Pages Deployment", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "GitHub Pages Deployment", "community": 4, "community_name": "Deployment and Docs", "source_file": ".github/workflows/static.yml", "file_type": "concept", "degree": 1}, {"id": "readme_topcss_airscan_qr", "label": "topcss AirScan-QR", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "topcss AirScan-QR", "community": 4, "community_name": "Deployment and Docs", "source_file": "README.md", "file_type": "concept", "degree": 2}, {"id": "readme_airscan_qr", "label": "airscan-qr", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "airscan-qr", "community": 4, "community_name": "Deployment and Docs", "source_file": "README.md", "file_type": "document", "degree": 3}, {"id": "readme_pure_localized_version", "label": "Pure Localized Version", "color": {"background": "#59A14F", "border": "#59A14F", "highlight": {"background": "#ffffff", "border": "#59A14F"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "Pure Localized Version", "community": 4, "community_name": "Deployment and Docs", "source_file": "README.md", "file_type": "rationale", "degree": 2}, {"id": "index_abandonreceive", "label": "abandonReceive", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "abandonReceive", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_clearreceivesession", "label": "clearReceiveSession", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "clearReceiveSession", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_scanloop", "label": "scanLoop", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "scanLoop", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_schedulescan", "label": "scheduleScan", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "scheduleScan", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_startscanner", "label": "startScanner", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "startScanner", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_startscreenscanner", "label": "startScreenScanner", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "startScreenScanner", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_multi_region_qr_scanning", "label": "Multi-Region QR Scanning", "color": {"background": "#EDC948", "border": "#EDC948", "highlight": {"background": "#ffffff", "border": "#EDC948"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "Multi-Region QR Scanning", "community": 5, "community_name": "QR Scanning", "source_file": "index.html", "file_type": "rationale", "degree": 1}, {"id": "index_finishcurrenttransfer", "label": "finishCurrentTransfer", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "finishCurrentTransfer", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_newtransferid", "label": "newTransferId", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 12.7, "font": {"size": 0, "color": "#ffffff"}, "title": "newTransferId", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 1}, {"id": "index_rendersendersegments", "label": "renderSenderSegments", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 15.5, "font": {"size": 12, "color": "#ffffff"}, "title": "renderSenderSegments", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 2}, {"id": "index_setsenderlocked", "label": "setSenderLocked", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "setSenderLocked", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_sha256hex", "label": "sha256Hex", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 18.2, "font": {"size": 12, "color": "#ffffff"}, "title": "sha256Hex", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 3}, {"id": "index_startfilesegment", "label": "startFileSegment", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 26.4, "font": {"size": 12, "color": "#ffffff"}, "title": "startFileSegment", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 6}, {"id": "index_startsending", "label": "startSending", "color": {"background": "#B07AA1", "border": "#B07AA1", "highlight": {"background": "#ffffff", "border": "#B07AA1"}}, "size": 20.9, "font": {"size": 12, "color": "#ffffff"}, "title": "startSending", "community": 6, "community_name": "Legacy Sender Flow", "source_file": "index.html", "file_type": "code", "degree": 4}, {"id": "sender_formatsize", "label": "formatSize", "color": {"background": "#BAB0AC", "border": "#BAB0AC", "highlight": {"background": "#ffffff", "border": "#BAB0AC"}}, "size": 10.0, "font": {"size": 0, "color": "#ffffff"}, "title": "formatSize", "community": 9, "community_name": "Sender Formatting", "source_file": "sender.html", "file_type": "code", "degree": 0}];
+const RAW_EDGES = [{"from": "lib_jsqr_min_a", "to": "lib_jsqr_min_s", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_a", "to": "lib_jsqr_min_d", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_a", "to": "lib_jsqr_min_i", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_a", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_b", "to": "lib_jsqr_min_d", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_b", "to": "lib_jsqr_min_k", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_b", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_b", "to": "lib_jsqr_min_c", "label": "indirect_call", "title": "indirect_call [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "lib_jsqr_min_c", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_c", "to": "lib_jsqr_min_i", "label": "indirect_call", "title": "indirect_call [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "lib_jsqr_min_c", "to": "lib_jsqr_min_n", "label": "indirect_call", "title": "indirect_call [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "lib_jsqr_min_c", "to": "lib_jsqr_min_k", "label": "indirect_call", "title": "indirect_call [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "lib_jsqr_min_d", "to": "lib_jsqr_min_n", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_d", "to": "lib_jsqr_min_i", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_d", "to": "lib_jsqr_min_k", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_d", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_i", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_i", "to": "lib_qrious_min_t", "label": "indirect_call", "title": "indirect_call [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "lib_jsqr_min_k", "to": "lib_jsqr_min_n", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_k", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_l", "to": "lib_jsqr_min_n", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_l", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_n", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_o", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_r", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_jsqr_min_s", "to": "lib_jsqr_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_e", "to": "lib_qrious_min_i", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_e", "to": "lib_qrious_min_t", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_e", "to": "lib_qrious_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_i", "to": "lib_qrious_min_t", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_i", "to": "lib_qrious_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_n", "to": "lib_qrious_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "lib_qrious_min_t", "to": "lib_qrious_min", "label": "contains", "title": "contains [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_beginpacketstream", "to": "index_tick", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_beginpacketstream", "to": "index_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_beginpacketstream", "to": "index_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_beginpacketstream", "to": "index_asq3_fountain_protocol", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_beginpacketstream", "to": "sender_beginpacketstream", "label": "semantically_similar_to", "title": "semantically_similar_to [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_processpacket", "to": "index_handlefountainpacket", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_updaterecvui", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_utils_getdegree", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_utils_prng", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_utils_xor", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_xoridxlists", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_processpacket", "to": "index_asq3_fountain_protocol", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_tick", "to": "index_utils_getdegree", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_tick", "to": "index_utils_prng", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_tick", "to": "index_utils_u2b", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_tick", "to": "index_utils_xor", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_tick", "to": "index_asq3_fountain_protocol", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_tick", "to": "sender_tick", "label": "semantically_similar_to", "title": "semantically_similar_to [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "sender_beginpacketstream", "to": "sender_tick", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_beginpacketstream", "to": "sender_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_beginpacketstream", "to": "sender_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_beginpacketstream", "to": "sender_asq3_fountain_protocol", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "sender_tick", "to": "sender_utils_getdegree", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_tick", "to": "sender_utils_prng", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_tick", "to": "sender_utils_u2b", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_tick", "to": "sender_utils_xor", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_tick", "to": "sender_asq3_fountain_protocol", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_asq3_fountain_protocol", "to": "index_handlefountainpacket", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_asq3_fountain_protocol", "to": "sender_asq3_fountain_protocol", "label": "semantically_similar_to", "title": "semantically_similar_to [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_finalizerecv", "to": "index_formatsize", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizerecv", "to": "index_showrecvnotice", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizerecv", "to": "index_finalizesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizerecv", "to": "index_in_memory_file_reassembly", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_finalizesegment", "to": "index_renderrecvsegments", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizesegment", "to": "index_sha256hex", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizesegment", "to": "index_showrecvnotice", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizesegment", "to": "index_updateoverallprogress", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizesegment", "to": "index_updaterecvui", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finalizesegment", "to": "index_sha_256_segment_integrity", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_formatsize", "to": "index_renderrecvsegments", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_renderrecvsegments", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_showrecvnotice", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_updateoverallprogress", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_utils_b2u", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_scanloop", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_handlefountainpacket", "to": "index_segmented_transfer", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_renderrecvsegments", "to": "index_updaterecvui", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_showrecvnotice", "to": "index_abandonreceive", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_updateoverallprogress", "to": "index_updaterecvui", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_finishcurrenttransfer", "to": "sender_rendersendersegments", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_finishcurrenttransfer", "to": "sender_setsenderlocked", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_newtransferid", "to": "sender_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_rendersendersegments", "to": "sender_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_setsenderlocked", "to": "sender_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_setsenderlocked", "to": "sender_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_sha256hex", "to": "sender_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_sha256hex", "to": "sender_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "sender_startfilesegment", "to": "sender_segmented_transfer", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "sender_startfilesegment", "to": "index_startfilesegment", "label": "semantically_similar_to", "title": "semantically_similar_to [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_segmented_transfer", "to": "index_startfilesegment", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_segmented_transfer", "to": "sender_segmented_transfer", "label": "semantically_similar_to", "title": "semantically_similar_to [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "_github_workflows_static_deploy", "to": "_github_workflows_static_upload_artifact", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "_github_workflows_static_deploy", "to": "_github_workflows_static_github_pages", "label": "implements", "title": "implements [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "_github_workflows_static_upload_artifact", "to": "index_airscan_qr_fountain", "label": "references", "title": "references [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "_github_workflows_static_upload_artifact", "to": "readme_airscan_qr", "label": "references", "title": "references [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "_github_workflows_static_upload_artifact", "to": "sender_airscan_qr_fountain_sender", "label": "references", "title": "references [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "readme_topcss_airscan_qr", "to": "readme_airscan_qr", "label": "cites", "title": "cites [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "readme_topcss_airscan_qr", "to": "readme_pure_localized_version", "label": "rationale_for", "title": "rationale_for [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "readme_airscan_qr", "to": "readme_pure_localized_version", "label": "conceptually_related_to", "title": "conceptually_related_to [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_abandonreceive", "to": "index_clearreceivesession", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_clearreceivesession", "to": "index_startscanner", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_clearreceivesession", "to": "index_startscreenscanner", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_scanloop", "to": "index_schedulescan", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_scanloop", "to": "index_multi_region_qr_scanning", "label": "implements", "title": "implements [INFERRED]", "dashes": true, "width": 1, "color": {"opacity": 0.35}, "confidence": "INFERRED"}, {"from": "index_schedulescan", "to": "index_startscanner", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_schedulescan", "to": "index_startscreenscanner", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finishcurrenttransfer", "to": "index_rendersendersegments", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_finishcurrenttransfer", "to": "index_setsenderlocked", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_newtransferid", "to": "index_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_rendersendersegments", "to": "index_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_setsenderlocked", "to": "index_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_setsenderlocked", "to": "index_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_sha256hex", "to": "index_startfilesegment", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}, {"from": "index_sha256hex", "to": "index_startsending", "label": "calls", "title": "calls [EXTRACTED]", "dashes": false, "width": 2, "color": {"opacity": 0.7}, "confidence": "EXTRACTED"}];
+const LEGEND = [{"cid": 0, "color": "#4E79A7", "label": "Fountain Protocol", "count": 16}, {"cid": 1, "color": "#F28E2B", "label": "jsQR Library", "count": 12}, {"cid": 2, "color": "#E15759", "label": "Receive Reassembly", "count": 11}, {"cid": 3, "color": "#76B7B2", "label": "Segmented Send Flow", "count": 9}, {"cid": 4, "color": "#59A14F", "label": "Deployment and Docs", "count": 8}, {"cid": 5, "color": "#EDC948", "label": "QR Scanning", "count": 7}, {"cid": 6, "color": "#B07AA1", "label": "Legacy Sender Flow", "count": 7}, {"cid": 7, "color": "#FF9DA7", "label": "QRious Library", "count": 5}, {"cid": 8, "color": "#9C755F", "label": "Unused HTML5 QR", "count": 1}, {"cid": 9, "color": "#BAB0AC", "label": "Sender Formatting", "count": 1}];
+
+// HTML-escape helper — prevents XSS when injecting graph data into innerHTML
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Build vis datasets
+const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({
+  id: n.id, label: n.label, color: n.color, size: n.size,
+  font: n.font, title: n.title,
+  _community: n.community, _community_name: n.community_name,
+  _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+})));
+
+const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({
+  id: i, from: e.from, to: e.to,
+  label: '',
+  title: e.title,
+  dashes: e.dashes,
+  width: e.width,
+  color: e.color,
+  arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+})));
+
+const container = document.getElementById('graph');
+const network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+  physics: {
+    enabled: true,
+    solver: 'forceAtlas2Based',
+    forceAtlas2Based: {
+      gravitationalConstant: -60,
+      centralGravity: 0.005,
+      springLength: 120,
+      springConstant: 0.08,
+      damping: 0.4,
+      avoidOverlap: 0.8,
+    },
+    stabilization: { iterations: 200, fit: true },
+  },
+  interaction: {
+    hover: true,
+    tooltipDelay: 100,
+    hideEdgesOnDrag: true,
+    navigationButtons: false,
+    keyboard: false,
+  },
+  nodes: { shape: 'dot', borderWidth: 1.5 },
+  edges: { smooth: { type: 'continuous', roundness: 0.2 }, selectionWidth: 3 },
+});
+
+network.once('stabilizationIterationsDone', () => {
+  network.setOptions({ physics: { enabled: false } });
+});
+
+function showInfo(nodeId) {
+  const n = nodesDS.get(nodeId);
+  if (!n) return;
+  const neighborIds = network.getConnectedNodes(nodeId);
+  const neighborItems = neighborIds.map(nid => {
+    const nb = nodesDS.get(nid);
+    const color = nb ? nb.color.background : '#555';
+    return `<span class="neighbor-link" style="border-left-color:${esc(color)}" data-nid="${esc(nid)}">${esc(nb ? nb.label : nid)}</span>`;
+  }).join('');
+  document.getElementById('info-content').innerHTML = `
+    <div class="field"><b>${esc(n.label)}</b></div>
+    <div class="field">Type: ${esc(n._file_type || 'unknown')}</div>
+    <div class="field">Community: ${esc(n._community_name)}</div>
+    <div class="field">Source: ${esc(n._source_file || '-')}</div>
+    <div class="field">Degree: ${n._degree}</div>
+    ${neighborIds.length ? `<div class="field" style="margin-top:8px;color:#aaa;font-size:11px">Neighbors (${neighborIds.length})</div><div id="neighbors-list">${neighborItems}</div>` : ''}
+  `;
+}
+
+function focusNode(nodeId) {
+  network.focus(nodeId, { scale: 1.4, animation: true });
+  network.selectNodes([nodeId]);
+  showInfo(nodeId);
+}
+
+// Neighbor links use a data attribute + one delegated listener rather than an
+// inline onclick. A node id/label sourced from a document or a scraped URL
+// (graphify add) can contain a double-quote; dropping the stringified id
+// unescaped into a quoted onclick both broke every link and allowed a hostile
+// source to inject an event handler into the local report (stored XSS, #1838).
+// esc() on data-nid keeps the value inside the attribute; the listener reads it
+// back verbatim. Bound to document so it survives the innerHTML rebuild that
+// recreates #neighbors-list on each showInfo().
+document.addEventListener('click', e => {
+  const el = e.target.closest('.neighbor-link');
+  if (el && el.dataset.nid !== undefined) focusNode(el.dataset.nid);
+});
+
+// Track hovered node — hover detection is more reliable than click params
+let hoveredNodeId = null;
+network.on('hoverNode', params => {
+  hoveredNodeId = params.node;
+  container.style.cursor = 'pointer';
+});
+network.on('blurNode', () => {
+  hoveredNodeId = null;
+  container.style.cursor = 'default';
+});
+container.addEventListener('click', () => {
+  if (hoveredNodeId !== null) {
+    showInfo(hoveredNodeId);
+    network.selectNodes([hoveredNodeId]);
+  }
+});
+network.on('click', params => {
+  if (params.nodes.length > 0) {
+    showInfo(params.nodes[0]);
+  } else if (hoveredNodeId === null) {
+    document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
+  }
+});
+
+const searchInput = document.getElementById('search');
+const searchResults = document.getElementById('search-results');
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.toLowerCase().trim();
+  searchResults.innerHTML = '';
+  if (!q) { searchResults.style.display = 'none'; return; }
+  const matches = RAW_NODES.filter(n => n.label.toLowerCase().includes(q)).slice(0, 20);
+  if (!matches.length) { searchResults.style.display = 'none'; return; }
+  searchResults.style.display = 'block';
+  matches.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'search-item';
+    el.textContent = n.label;
+    el.style.borderLeft = `3px solid ${n.color.background}`;
+    el.style.paddingLeft = '8px';
+    el.onclick = () => {
+      network.focus(n.id, { scale: 1.5, animation: true });
+      network.selectNodes([n.id]);
+      showInfo(n.id);
+      searchResults.style.display = 'none';
+      searchInput.value = '';
+    };
+    searchResults.appendChild(el);
+  });
+});
+document.addEventListener('click', e => {
+  if (!searchResults.contains(e.target) && e.target !== searchInput)
+    searchResults.style.display = 'none';
+});
+
+const hiddenCommunities = new Set();
+
+const selectAllCb = document.getElementById('select-all-cb');
+
+function updateSelectAllState() {
+  const total = LEGEND.length;
+  const hidden = hiddenCommunities.size;
+  selectAllCb.checked = hidden === 0;
+  selectAllCb.indeterminate = hidden > 0 && hidden < total;
+}
+
+function toggleAllCommunities(hide) {
+  document.querySelectorAll('.legend-item').forEach(item => {
+    hide ? item.classList.add('dimmed') : item.classList.remove('dimmed');
+  });
+  document.querySelectorAll('.legend-cb').forEach(cb => {
+    cb.checked = !hide;
+  });
+  LEGEND.forEach(c => {
+    if (hide) hiddenCommunities.add(c.cid); else hiddenCommunities.delete(c.cid);
+  });
+  const updates = RAW_NODES.map(n => ({ id: n.id, hidden: hide }));
+  nodesDS.update(updates);
+  updateSelectAllState();
+}
+
+const legendEl = document.getElementById('legend');
+LEGEND.forEach(c => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'legend-cb';
+  cb.checked = true;
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    if (cb.checked) {
+      hiddenCommunities.delete(c.cid);
+      item.classList.remove('dimmed');
+    } else {
+      hiddenCommunities.add(c.cid);
+      item.classList.add('dimmed');
+    }
+    const updates = RAW_NODES
+      .filter(n => n.community === c.cid)
+      .map(n => ({ id: n.id, hidden: !cb.checked }));
+    nodesDS.update(updates);
+    updateSelectAllState();
+  });
+  item.innerHTML = `<div class="legend-dot" style="background:${c.color}"></div>
+    <span class="legend-label">${c.label}</span>
+    <span class="legend-count">${c.count}</span>`;
+  item.prepend(cb);
+  item.onclick = (e) => {
+    if (e.target === cb) return;
+    cb.checked = !cb.checked;
+    cb.dispatchEvent(new Event('change'));
+  };
+  legendEl.appendChild(item);
+});
+</script>
+<script>
+// Render hyperedges as shaded regions
+const hyperedges = [{"id": "github_pages_static_bundle", "label": "GitHub Pages Static Bundle", "nodes": ["_github_workflows_static_upload_artifact", "index_airscan_qr_fountain", "sender_airscan_qr_fountain_sender", "readme_airscan_qr"], "relation": "participate_in", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".github/workflows/static.yml"}, {"id": "asq3_end_to_end_fountain_transfer", "label": "ASQ3 End-to-End Fountain Transfer", "nodes": ["index_beginpacketstream", "index_tick", "index_handlefountainpacket", "index_processpacket", "index_finalizesegment"], "relation": "implement", "confidence": "INFERRED", "confidence_score": 0.95, "source_file": "index.html"}, {"id": "shared_sender_implementation", "label": "Shared Sender Implementation", "nodes": ["index_startfilesegment", "index_beginpacketstream", "index_tick", "sender_startfilesegment", "sender_beginpacketstream", "sender_tick"], "relation": "form", "confidence": "INFERRED", "confidence_score": 0.95, "source_file": "sender.html"}];
+// afterDrawing passes ctx already transformed to network coordinate space.
+// Draw node positions raw — no manual pan/zoom/DPR math needed.
+
+// Andrew's monotone chain. Returns the hull in counter-clockwise order, which
+// is what the perimeter must be traced in. Collinear and duplicate points
+// collapse to the extremes, so degenerate member sets render as a segment
+// rather than a zero-area crossed path.
+function convexHull(pts) {
+    const p = pts.slice().sort((a, b) => (a.x - b.x) || (a.y - b.y));
+    if (p.length < 3) return p;
+    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const build = seq => {
+        const out = [];
+        for (const q of seq) {
+            while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], q) <= 0) out.pop();
+            out.push(q);
+        }
+        out.pop();
+        return out;
+    };
+    const hull = build(p).concat(build(p.slice().reverse()));
+    return hull.length >= 3 ? hull : p;
+}
+network.on('afterDrawing', function(ctx) {
+    hyperedges.forEach(h => {
+        const positions = h.nodes
+            .map(nid => network.getPositions([nid])[nid])
+            .filter(p => p !== undefined);
+        if (positions.length < 2) return;
+        ctx.save();
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = '#6366f1';
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // Centroid and expanded hull in network coordinates.
+        // The perimeter must follow hull order, not h.nodes order: tracing the
+        // raw member order self-intersects whenever the layout does not happen
+        // to place members in angular order, filling as crossed wedges.
+        const cx = positions.reduce((s, p) => s + p.x, 0) / positions.length;
+        const cy = positions.reduce((s, p) => s + p.y, 0) / positions.length;
+        const hull = convexHull(positions);
+        const expanded = hull.map(p => ({
+            x: cx + (p.x - cx) * 1.15,
+            y: cy + (p.y - cy) * 1.15
+        }));
+        ctx.moveTo(expanded[0].x, expanded[0].y);
+        expanded.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 0.4;
+        ctx.stroke();
+        // Label
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = '#4f46e5';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(h.label, cx, cy - 5);
+        ctx.restore();
+    });
+});
+</script>
+</body>
+</html>
